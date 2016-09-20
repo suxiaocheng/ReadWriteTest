@@ -49,6 +49,7 @@ public class MainActivity extends AppCompatActivity {
     @OnClick(R.id.btStart)
     void startTest() {
         Intent startIntent = new Intent(this, ReadWriteService.class);
+        startIntent.putExtra(ReadWriteService.TEST_DIRECTORY, listDiskLabel.get((int)spinnerDiskLabel.getSelectedItemId()));
         startService(startIntent);
     }
 
