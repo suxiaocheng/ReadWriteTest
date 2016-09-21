@@ -4,6 +4,7 @@ import android.app.Service;
 import android.content.Intent;
 import android.os.Binder;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.Message;
@@ -11,8 +12,10 @@ import android.util.Log;
 import android.widget.Toast;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.util.Random;
 
 public class ReadWriteService extends Service {
@@ -23,6 +26,7 @@ public class ReadWriteService extends Service {
 
     private MyBinder mBinder = new MyBinder();
     private ReadWriteHandler mReadWriteHandler;
+    private Looper mServiceLooper;
 
     public ReadWriteService() {
     }
@@ -39,30 +43,102 @@ public class ReadWriteService extends Service {
             File fDirectory = new File(strDirectory);
             byte[] w_buffer = new byte[65536];
             byte[] r_buffer = new byte[65536];
+            Double r_speed, w_speed;
+            Boolean bFileOpError = false;
+
             Random random = new Random();
 
             if (fDirectory.exists()) {
                 if (fDirectory.canWrite()) {
-                    // 1. Create the file.
-                    String strTestFile = strDirectory + File.separator + TEST_FILE_NAME;
-                    File fTestFile = new File(strTestFile);
-                    int seed = random.nextInt();
+                    while(bFileOpError == false) {
+                        // 1. Create the file.
+                        String strTestFile = strDirectory + File.separator + TEST_FILE_NAME;
+                        File fTestFile = new File(strTestFile);
+                        int seed = random.nextInt();
+                        long lWriteLength, lReadLength;
+                        Boolean bNeedQuit = false;
+                        Boolean bDataCompareFail = false;
 
-                    if (fTestFile.exists()) {
-                        fTestFile.delete();
-                    }
-                    try {
-                        FileOutputStream fos = new FileOutputStream(fTestFile);
+                        try {
+                            // 2. Delete the test file.
+                            if (fTestFile.exists()) {
+                                fTestFile.delete();
+                                Log.d(TAG, "Delete test file: " + strTestFile);
+                            }
 
-                        // 2. Write the file to the max size of disk
-                        while (true) {
-                            //fos.write();
+                            // 3. Write the file to the max size of disk
+                            FileOutputStream fos = new FileOutputStream(fTestFile);
+                            lWriteLength = 0x0;
+                            bNeedQuit = false;
+                            while (bNeedQuit == false) {
+                                for (int i = 0; i < w_buffer.length / 512; i++) {
+                                    for (int j = 0; j < 512; j++) {
+                                        w_buffer[i * 512 + j] = (byte) (i + lWriteLength);
+                                    }
+                                }
+                                try {
+                                    fos.write(w_buffer);
+                                } catch (IOException e) {
+                                    //e.printStackTrace();
+                                    bNeedQuit = true;
+                                    Log.d(TAG, "Write the file end or error");
+                                } finally {
+                                    try {
+                                        fos.close();
+                                    } catch (IOException e) {
+                                        e.printStackTrace();
+                                        bFileOpError = true;
+                                        Log.e(TAG, "Close the write file error");
+                                    }
+                                }
+                                lWriteLength += w_buffer.length;
+                            }
+                            if(bFileOpError){
+                                break;
+                            }
+                            // 4. Verify the file in the disk
+                            FileInputStream fis = new FileInputStream(fTestFile);
+                            lReadLength = 0x0;
+                            bNeedQuit = false;
+                            bDataCompareFail = false;
+                            while ((bNeedQuit == false) && (bDataCompareFail == false)) {
+                                for (int i = 0; i < w_buffer.length / 512; i++) {
+                                    for (int j = 0; j < 512; j++) {
+                                        w_buffer[i * 512 + j] = (byte) (i + lReadLength);
+                                    }
+                                }
+                                try {
+                                    fis.read(r_buffer);
+                                    for (int i = 0; i < w_buffer.length; i++) {
+                                        if (w_buffer[i] != r_buffer[i]) {
+                                            Log.e(TAG, "Data compare fail at address: " + (lReadLength + i));
+                                            bDataCompareFail = true;
+                                            break;
+                                        }
+                                    }
+                                } catch (IOException e) {
+                                    //e.printStackTrace();
+                                    bNeedQuit = true;
+                                    Log.d(TAG, "Read the file end or error");
+                                } finally {
+                                    try {
+                                        fis.close();
+                                    } catch (IOException e) {
+                                        e.printStackTrace();
+                                        bFileOpError = true;
+                                        Log.e(TAG, "Close the read file error");
+                                    }
+                                }
+                                lReadLength += r_buffer.length;
+                            }
+                            if(bFileOpError){
+                                break;
+                            }
+                        } catch (FileNotFoundException e) {
+                            e.printStackTrace();
+                            bFileOpError = true;
+                            Log.e(TAG, "File operation error");
                         }
-                        // 3. Verify the file in the disk
-                        // 4. Delete the file.
-                        // 5. Goto to step2
-                    } catch (FileNotFoundException e) {
-                        e.printStackTrace();
                     }
                 }
             }
@@ -83,6 +159,17 @@ public class ReadWriteService extends Service {
     public void onCreate() {
         super.onCreate();
         Log.d(TAG, "onCreate() executed");
+
+        // Start up the thread running the service.  Note that we create a
+        // separate thread because the service normally runs in the process's
+        // main thread, which we don't want to block.  We also make it
+        // background priority so CPU-intensive work will not disrupt our UI.
+        HandlerThread thread = new HandlerThread(TAG);
+        thread.start();
+
+        // Get the HandlerThread's Looper and use it for our Handler
+        mServiceLooper = thread.getLooper();
+        mReadWriteHandler = new ReadWriteHandler(mServiceLooper);
     }
 
     @Override
